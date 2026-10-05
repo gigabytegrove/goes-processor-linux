@@ -1,0 +1,23 @@
+name: PostGate Runner Probe
+on:
+  push:
+    branches: [postgate-runner-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out private PostGate
+        uses: actions/checkout@v4
+        with:
+          repository: gigabytegrove/postgate
+          ref: main
+          path: postgate
+          token: ${{ github.token }}
+      - name: Confirm source access
+        run: |
+          test -f postgate/go.mod
+          git -C postgate rev-parse HEAD
