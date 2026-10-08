@@ -94,6 +94,20 @@ jobs:
 
           cp ../openHC/board/ea/common/kernel/drivers/gpio/gpio-intelce.c drivers/gpio/
           cp ../openHC/board/ea/common/kernel/drivers/gpio/gpio-ea-board.c drivers/gpio/
+
+          # gpiolib changed gpio_chip.set() to void.  Port the CE5300 callback
+          # instead of compiling through an incompatible function pointer.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("drivers/gpio/gpio-intelce.c")
+          s=p.read_text()
+          s=s.replace("static int intelce_gpio_set(struct gpio_chip *chip, unsigned off, int val)",
+                      "static void intelce_gpio_set(struct gpio_chip *chip, unsigned off, int val)")
+          s=s.replace("\tspin_unlock_irqrestore(&g->lock, flags);\n\treturn 0;\n}\n\nstatic int intelce_gpio_direction_input",
+                      "\tspin_unlock_irqrestore(&g->lock, flags);\n}\n\nstatic int intelce_gpio_direction_input",1)
+          p.write_text(s)
+          assert "static void intelce_gpio_set" in s
+          PY
           cp ../openHC/board/ea/common/kernel/drivers/pwm/pwm-ce5300.c drivers/pwm/
           cp ../openHC/board/ea/common/kernel/drivers/spi/spi-ea-ce5xx.c drivers/spi/
           cp ../openHC/board/ea/common/kernel/drivers/leds/leds-ea-board.c drivers/leds/
