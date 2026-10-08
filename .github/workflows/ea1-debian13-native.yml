@@ -41,8 +41,25 @@ jobs:
           set -eux
           cd build/linux-6.12.111
           P=../openHC/board/ea/common/patches/linux
+
+          # 0001 differs by one allocation line between 6.12 and 7.1.  The
+          # functional hunks are identical; apply those, then remove Debian
+          # 6.12's remaining DT-only guard explicitly and assert the result.
+          patch -p1 --forward < "$P/0001-i2c-pxa-pci-enumerate-without-DT.patch" || true
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("drivers/i2c/busses/i2c-pxa-pci.c")
+          s=p.read_text()
+          guard='''\tif (!dev->dev.of_node) {\n\t\tdev_err(&dev->dev, "Missing device tree node.\\n");\n\t\treturn -EINVAL;\n\t}\n'''
+          s=s.replace(guard, "")
+          p.write_text(s)
+          assert "#define CE4100_PCI_I2C_DEVS\t4" in s
+          assert "clk_register_fixed_rate" in s
+          assert "Missing device tree node" not in s
+          PY
+          rm -f drivers/i2c/busses/i2c-pxa-pci.c.rej
+
           for p in \
-            0001-i2c-pxa-pci-enumerate-without-DT.patch \
             0002-x86-ce5300-serial-clock-and-irq.patch \
             0003-e1000-ce5300-fake-phy.patch \
             0006-8250-ce5300-force-xscale.patch \
