@@ -1,0 +1,252 @@
+name: EA1 Debian 13 native kernel
+
+on:
+  push:
+    branches:
+      - tmp/ea1-debian13-native-build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev dwarves \
+            libncurses-dev fakeroot rsync cpio xz-utils zstd git curl \
+            dpkg-dev devscripts kmod
+
+      - name: Fetch Debian 13 kernel source and CE5310 enablement
+        run: |
+          set -eux
+          mkdir -p build
+          cd build
+          curl -fL -O https://security.debian.org/debian-security/pool/updates/main/l/linux/linux_6.12.111.orig.tar.xz
+          curl -fL -O https://security.debian.org/debian-security/pool/updates/main/l/linux/linux_6.12.111-1.debian.tar.xz
+          curl -fL -O https://security.debian.org/debian-security/pool/updates/main/l/linux/linux_6.12.111-1.dsc
+          dpkg-source -x linux_6.12.111-1.dsc
+          git clone --depth 1 https://github.com/The1TrueJoe/openHC.git openHC
+
+      - name: Apply CE5310 hardware patches
+        run: |
+          set -eux
+          cd build/linux-6.12.111
+          P=../openHC/board/ea/common/patches/linux
+          for p in \
+            0001-i2c-pxa-pci-enumerate-without-DT.patch \
+            0002-x86-ce5300-serial-clock-and-irq.patch \
+            0003-e1000-ce5300-fake-phy.patch \
+            0006-8250-ce5300-force-xscale.patch \
+            0010-8250-ce5300-poll-tx.patch \
+            0011-8250-pci-ea-no-ce4100-uart.patch \
+            0012-8250-ce5300-gen3-fifo-dma.patch \
+            0013-i2c-pxa-build-on-x86_64.patch \
+            0014-ehci-ce5300-tdi-hostpc.patch
+          do
+            echo "=== applying $p ==="
+            patch -p1 --forward < "$P/$p"
+          done
+
+          cp ../openHC/board/ea/common/kernel/drivers/gpio/gpio-intelce.c drivers/gpio/
+          cp ../openHC/board/ea/common/kernel/drivers/gpio/gpio-ea-board.c drivers/gpio/
+          cp ../openHC/board/ea/common/kernel/drivers/pwm/pwm-ce5300.c drivers/pwm/
+          cp ../openHC/board/ea/common/kernel/drivers/spi/spi-ea-ce5xx.c drivers/spi/
+          cp ../openHC/board/ea/common/kernel/drivers/leds/leds-ea-board.c drivers/leds/
+
+          cat >> drivers/gpio/Makefile <<'EOF'
+          obj-y += gpio-intelce.o
+          obj-y += gpio-ea-board.o
+          EOF
+          cat >> drivers/pwm/Makefile <<'EOF'
+          obj-y += pwm-ce5300.o
+          EOF
+          cat >> drivers/spi/Makefile <<'EOF'
+          obj-y += spi-ea-ce5xx.o
+          EOF
+          cat >> drivers/leds/Makefile <<'EOF'
+          obj-y += leds-ea-board.o
+          EOF
+
+      - name: Configure native amd64 Debian kernel for C4-EA1-V2
+        run: |
+          set -eux
+          cd build/linux-6.12.111
+          make x86_64_defconfig
+
+          # Reuse the proven CE5310 size/platform baseline, then layer Debian needs.
+          scripts/kconfig/merge_config.sh -m .config \
+            ../openHC/board/ea/common/linux/common.fragment \
+            ../openHC/board/ea/common/features/emmc/linux.fragment
+
+          C=scripts/config
+          $C --enable 64BIT
+          $C --enable X86_64
+          $C --enable MATOM
+          $C --enable SMP
+          $C --enable MODULES
+          $C --enable MODULE_UNLOAD
+          $C --enable PCI
+          $C --enable PCIEPORTBUS
+          $C --enable ACPI
+          $C --enable DEVTMPFS
+          $C --enable DEVTMPFS_MOUNT
+          $C --enable TMPFS
+          $C --enable TMPFS_POSIX_ACL
+          $C --enable TMPFS_XATTR
+          $C --enable PROC_FS
+          $C --enable SYSFS
+          $C --enable FHANDLE
+          $C --enable EPOLL
+          $C --enable SIGNALFD
+          $C --enable TIMERFD
+          $C --enable INOTIFY_USER
+          $C --enable CGROUPS
+          $C --enable MEMCG
+          $C --enable CGROUP_SCHED
+          $C --enable FAIR_GROUP_SCHED
+          $C --enable NAMESPACES
+          $C --enable UTS_NS
+          $C --enable IPC_NS
+          $C --enable PID_NS
+          $C --enable NET_NS
+          $C --enable USER_NS
+          $C --enable UNIX
+          $C --enable PACKET
+          $C --enable INET
+          $C --enable IPV6
+          $C --enable NET
+          $C --enable NETDEVICES
+          $C --enable ETHERNET
+          $C --enable NET_VENDOR_INTEL
+          $C --enable E1000
+          $C --enable VLAN_8021Q
+
+          # Exact on-board Wi-Fi: Realtek RTL8192EE [10ec:818b].
+          $C --enable WLAN
+          $C --module CFG80211
+          $C --module MAC80211
+          $C --enable WLAN_VENDOR_REALTEK
+          $C --module RTLWIFI
+          $C --module RTL8192EE
+          $C --enable FW_LOADER
+
+          # eMMC root filesystem must be built in: there is no initramfs dependency.
+          $C --enable MMC
+          $C --enable MMC_BLOCK
+          $C --enable MMC_SDHCI
+          $C --enable MMC_SDHCI_PCI
+          $C --enable EXT4_FS
+
+          # USB and the CP210x Zigbee bridge.
+          $C --enable USB_SUPPORT
+          $C --enable USB
+          $C --enable USB_PCI
+          $C --enable USB_EHCI_HCD
+          $C --enable USB_EHCI_PCI
+          $C --enable USB_EHCI_ROOT_HUB_TT
+          $C --module USB_SERIAL
+          $C --module USB_SERIAL_CP210X
+
+          # CE5300 GPIO/I2C/PWM + boot SPI-NOR.
+          $C --enable GPIOLIB
+          $C --enable GPIO_CDEV
+          $C --enable GPIO_SYSFS
+          $C --enable I2C
+          $C --enable I2C_PXA
+          $C --module I2C_CHARDEV
+          $C --enable COMMON_CLK
+          $C --enable HWMON
+          $C --module SENSORS_LM75
+          $C --enable PWM
+          $C --enable PWM_SYSFS
+          $C --enable SPI
+          $C --enable SPI_MASTER
+          $C --enable MTD
+          $C --enable MTD_BLOCK
+          $C --enable MTD_SPI_NOR
+          $C --enable SPI_MEM
+
+          # Debian networking/storage conveniences as modules.
+          $C --module FUSE_FS
+          $C --module OVERLAY_FS
+          $C --module VFAT_FS
+          $C --module NLS_CP437
+          $C --module NLS_ISO8859_1
+          $C --module USB_STORAGE
+          $C --module SCSI
+          $C --module BLK_DEV_SD
+
+          # Keep bootlinux's protected-mode copy below its 7,417,856-byte wall.
+          $C --enable KERNEL_XZ
+          $C --disable KERNEL_GZIP
+          $C --enable CC_OPTIMIZE_FOR_SIZE
+          $C --disable DEBUG_INFO
+          $C --disable DEBUG_KERNEL
+          $C --disable FTRACE
+          $C --disable KPROBES
+          $C --disable PROFILING
+          $C --disable KALLSYMS
+          $C --disable DRM
+          $C --disable SOUND
+          $C --disable SND
+          $C --disable MEDIA_SUPPORT
+          $C --disable AGP
+          $C --disable VGA_CONSOLE
+          $C --disable HYPERVISOR_GUEST
+          $C --disable PARAVIRT
+          $C --disable VIRTUALIZATION
+          $C --disable EFI
+
+          # Direct native boot: CEFDK -> this kernel -> Debian /sbin/init on p1.
+          $C --enable CMDLINE_BOOL
+          $C --enable CMDLINE_OVERRIDE
+          $C --set-str CMDLINE 'console=ttyS0,115200 pci=realloc,nocrs,routeirq memmap=exactmap memmap=68K@0 memmap=60K#0x11000 memmap=512K@0x20000 memmap=255M@1M memmap=1536M@0x10000000 root=/dev/mmcblk0p1 rootwait rw'
+          $C --disable BLK_DEV_INITRD
+
+          # Stock CE PCI platform support is 32-bit-only and DT-dependent; the
+          # CE5310 support above is explicit and x86_64-safe.
+          $C --disable X86_INTEL_CE
+          $C --disable GPIO_SODAVILLE
+
+          make olddefconfig
+          grep -E '^(CONFIG_64BIT|CONFIG_X86_64|CONFIG_E1000|CONFIG_MMC_SDHCI_PCI|CONFIG_EXT4_FS|CONFIG_RTL8192EE|CONFIG_I2C_PXA|CONFIG_USB_EHCI_PCI|CONFIG_CMDLINE)=' .config || true
+
+      - name: Build kernel and Debian packages
+        run: |
+          set -eux
+          cd build/linux-6.12.111
+          export KBUILD_BUILD_USER=debian
+          export KBUILD_BUILD_HOST=control4-ea1-v2
+          make -j2 LOCALVERSION=-ea1v2-deb13 bzImage modules
+          KSIZE=$(stat -c %s arch/x86/boot/bzImage)
+          echo "bzImage size: $KSIZE"
+          test "$KSIZE" -lt 7417856
+          make -j2 LOCALVERSION=-ea1v2-deb13 bindeb-pkg KDEB_PKGVERSION=1
+
+      - name: Collect artifacts
+        run: |
+          set -eux
+          mkdir -p artifacts
+          cp build/linux-6.12.111/arch/x86/boot/bzImage artifacts/bzImage-6.12.111-ea1v2-deb13
+          cp build/linux-6.12.111/.config artifacts/config-6.12.111-ea1v2-deb13
+          cp build/linux-6.12.111/System.map artifacts/System.map-6.12.111-ea1v2-deb13
+          cp build/*.deb artifacts/ || true
+          (cd artifacts && sha256sum * > SHA256SUMS)
+          ls -lh artifacts
+          cat artifacts/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ea1-debian13-native-kernel
+          path: artifacts/
+          retention-days: 2
+          compression-level: 0
