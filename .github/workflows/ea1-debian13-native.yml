@@ -62,8 +62,27 @@ jobs:
           for p in \
             0002-x86-ce5300-serial-clock-and-irq.patch \
             0003-e1000-ce5300-fake-phy.patch \
-            0006-8250-ce5300-force-xscale.patch \
-            0010-8250-ce5300-poll-tx.patch \
+            0006-8250-ce5300-force-xscale.patch
+          do
+            echo "=== applying $p ==="
+            patch -p1 --forward < "$P/$p"
+          done
+
+          # 6.12's 8250 IRQ handler has grown local state since 7.1.  The actual
+          # CE5300 change is still exactly the same: a timer-polled XScale UART
+          # must not return early merely because IIR says NO_INT; LSR drives TX.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("drivers/tty/serial/8250/8250_port.c")
+          s=p.read_text()
+          old="\tif (iir & UART_IIR_NO_INT)\n\t\treturn 0;\n"
+          new="\tif ((iir & UART_IIR_NO_INT) &&\n\t    !(port->irq == 0 && port->type == PORT_XSCALE))\n\t\treturn 0;\n"
+          assert old in s
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+
+          for p in \
             0011-8250-pci-ea-no-ce4100-uart.patch \
             0012-8250-ce5300-gen3-fifo-dma.patch \
             0013-i2c-pxa-build-on-x86_64.patch \
