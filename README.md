@@ -39,3 +39,7 @@ Clone the repository:
 ```bash
 git clone https://github.com/Gigabyte-Grove/goes-processor-linux.git
 cd goes-processor-linux
+
+## Support Gigabyte Grove
+
+If this project is useful to you, you can support ongoing Gigabyte Grove development with an optional [PayPal donation](https://paypal.me/gigabytegrove). Donations are appreciated but never required to use this repository.
